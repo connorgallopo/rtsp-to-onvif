@@ -8,6 +8,7 @@ const fs = require('fs');
 const logger = require('simple-node-logger');
 
 const { getIp4FromMac } = require('./net-tools')
+const EventsProxy = require('./events-proxy')
 
 Date.prototype.stdTimezoneOffset = function () {
     let jan = new Date(this.getFullYear(), 0, 1);
@@ -23,6 +24,7 @@ module.exports = class OnvifServer {
     constructor(logger, config) {
         this.config = config;
         this.logger = logger;
+        this.eventsProxy = new EventsProxy(logger, config);
 
         this.config.hostname = getIp4FromMac(logger, this.config.mac);
         if (!this.config.hostname)
@@ -235,6 +237,15 @@ module.exports = class OnvifServer {
                             }
                         }
 
+                        if (args.Category === undefined || args.Category == 'All' || args.Category == 'Events') {
+                            response.Capabilities['Events'] = {
+                                XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/Events`,
+                                WSSubscriptionPolicySupport: false,
+                                WSPullPointSupport: true,
+                                WSPausableSubscriptionManagerInterfaceSupport: false
+                            };
+                        }
+
                         return response;
                     },
 
@@ -244,18 +255,17 @@ module.exports = class OnvifServer {
                                 {
                                     Namespace: 'http://www.onvif.org/ver10/device/wsdl',
                                     XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/device_service`,
-                                    Version: {
-                                        Major: 2,
-                                        Minor: 5,
-                                    }
+                                    Version: { Major: 2, Minor: 5 }
                                 },
                                 {
                                     Namespace: 'http://www.onvif.org/ver10/media/wsdl',
                                     XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/media_service`,
-                                    Version: {
-                                        Major: 2,
-                                        Minor: 5,
-                                    }
+                                    Version: { Major: 2, Minor: 5 }
+                                },
+                                {
+                                    Namespace: 'http://www.onvif.org/ver10/events/wsdl',
+                                    XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/Events`,
+                                    Version: { Major: 2, Minor: 5 }
                                 }
                             ]
                         };
@@ -332,6 +342,8 @@ module.exports = class OnvifServer {
             let image = fs.readFileSync('./resources/snapshot.png');
             response.writeHead(200, { 'Content-Type': 'image/png' });
             response.end(image, 'binary');
+        } else if (this.eventsProxy.matches(action)) {
+            this.eventsProxy.handle(request, response);
         } else {
             response.writeHead(404, { 'Content-Type': 'text/plain' });
             response.write('404 Not Found\n');
@@ -342,7 +354,7 @@ module.exports = class OnvifServer {
     startHttpServer() {
         this.logger.info(`SERVER: ${this.config.name} - HTTP listening on ${this.config.hostname}:${this.config.ports.server}`);
 
-        this.server = http.createServer(this.listen);
+        this.server = http.createServer(this.listen.bind(this));
         this.server.listen(this.config.ports.server, this.config.hostname);
 
         this.deviceService = soap.listen(this.server, {
