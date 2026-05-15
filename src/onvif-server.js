@@ -10,6 +10,7 @@ const logger = require('simple-node-logger');
 const { getIp4FromMac } = require('./net-tools')
 const EventsProxy = require('./events-proxy')
 const PtzProxy = require('./ptz-proxy')
+const ImagingProxy = require('./imaging-proxy')
 
 Date.prototype.stdTimezoneOffset = function () {
     let jan = new Date(this.getFullYear(), 0, 1);
@@ -27,6 +28,7 @@ module.exports = class OnvifServer {
         this.logger = logger;
         this.eventsProxy = new EventsProxy(logger, config);
         this.ptzProxy = config.ptz ? new PtzProxy(logger, config) : null;
+        this.imagingProxy = new ImagingProxy(logger, config);
 
         this.config.hostname = getIp4FromMac(logger, this.config.mac);
         if (!this.config.hostname)
@@ -254,6 +256,12 @@ module.exports = class OnvifServer {
                             };
                         }
 
+                        if (args.Category === undefined || args.Category == 'All' || args.Category == 'Imaging') {
+                            response.Capabilities['Imaging'] = {
+                                XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/Imaging`
+                            };
+                        }
+
                         return response;
                     },
 
@@ -279,7 +287,12 @@ module.exports = class OnvifServer {
                                     Namespace: 'http://www.onvif.org/ver20/ptz/wsdl',
                                     XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/PTZ`,
                                     Version: { Major: 2, Minor: 5 }
-                                }] : [])
+                                }] : []),
+                                {
+                                    Namespace: 'http://www.onvif.org/ver20/imaging/wsdl',
+                                    XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/Imaging`,
+                                    Version: { Major: 2, Minor: 5 }
+                                }
                             ]
                         };
                     },
@@ -359,6 +372,8 @@ module.exports = class OnvifServer {
             this.eventsProxy.handle(request, response);
         } else if (this.ptzProxy && this.ptzProxy.matches(action)) {
             this.ptzProxy.handle(request, response);
+        } else if (this.imagingProxy.matches(action)) {
+            this.imagingProxy.handle(request, response);
         } else {
             response.writeHead(404, { 'Content-Type': 'text/plain' });
             response.write('404 Not Found\n');
