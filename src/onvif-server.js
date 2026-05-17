@@ -426,6 +426,10 @@ module.exports = class OnvifServer {
         this.discoveryMessageNo = 0;
         this.discoverySocket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 
+        this.discoverySocket.on('error', (err) => {
+            this.logger.error(`DISCOVERY: ${this.config.name} - socket error: ${err.message}`);
+        });
+
         this.discoverySocket.on('message', (message, remote) => {
 
             this.logger.debug(`SERVER: ${this.config.name} - Discovery request from ${remote.address}:${remote.port}`);
@@ -476,7 +480,14 @@ module.exports = class OnvifServer {
 
                     this.discoveryMessageNo++;
                     let responseBuffer = Buffer.from(response);
-                    return dgram.createSocket('udp4').send(responseBuffer, 0, responseBuffer.length, remote.port, remote.address);
+                    const replySocket = dgram.createSocket('udp4');
+                    replySocket.on('error', (sendErr) => {
+                        this.logger.warn(`DISCOVERY: ${this.config.name} - reply send error: ${sendErr.message}`);
+                        replySocket.close();
+                    });
+                    replySocket.send(responseBuffer, 0, responseBuffer.length, remote.port, remote.address, () => {
+                        replySocket.close();
+                    });
                 }
             });
         });
