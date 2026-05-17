@@ -1,12 +1,14 @@
+version: '3.8'
+
 services:
   rtsp-to-onvif:
-    image: kulasolutions/rtsp-to-onvif:latest
-    hostname: rtsp-to-onvif
-    #restart: unless-stopped
-    volumes:
-      - ./config.yaml:/onvif.yaml
-    network_mode: "host"   
+    image: ghcr.io/connorgallopo/rtsp-to-onvif:latest
+    restart: unless-stopped
+    network_mode: host
     cap_add:
       - NET_ADMIN
-    environment: # uncomment this to get more debug info during setup
-      DEBUG: 1
+    volumes:
+      - ./config.yaml:/onvif.yaml
+    environment:
+      # Uncomment for verbose trace logging during setup
+      # DEBUG: 1

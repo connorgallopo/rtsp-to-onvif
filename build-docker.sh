@@ -1,2 +1,2 @@
-#! /bin/bash
-docker build -t kulasolutions/rtsp-to-onvif:latest .
+#!/bin/bash
+docker build -t ghcr.io/connorgallopo/rtsp-to-onvif:latest .

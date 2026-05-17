@@ -2,7 +2,7 @@ const soap = require('soap');
 const http = require('http');
 const dgram = require('dgram');
 const xml2js = require('xml2js');
-const uuid = require('node-uuid');
+const crypto = require('crypto');
 const url = require('url');
 const fs = require('fs');
 const logger = require('simple-node-logger');
@@ -454,7 +454,7 @@ module.exports = class OnvifServer {
                         `<?xml version="1.0" encoding="UTF-8"?>
                         <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
                             <SOAP-ENV:Header>
-                                <wsa:MessageID>uuid:${uuid.v1()}</wsa:MessageID>
+                                <wsa:MessageID>uuid:${crypto.randomUUID()}</wsa:MessageID>
                                 <wsa:RelatesTo>${probeUuid}</wsa:RelatesTo>
                                 <wsa:To SOAP-ENV:mustUnderstand="true">http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</wsa:To>
                                 <wsa:Action SOAP-ENV:mustUnderstand="true">http://schemas.xmlsoap.org/ws/2005/04/discovery/ProbeMatches</wsa:Action>

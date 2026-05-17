@@ -1,26 +1,35 @@
 {
   "name": "rtsp-to-onvif",
   "version": "1.0.0",
-  "description": "RTSP to ONVIF Proxy Appliance",
+  "description": "Virtual ONVIF proxy that adds motion events, PTZ, and imaging on top of an RTSP camera, so UniFi Protect can adopt it.",
   "main": "main.js",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/connorgallopo/rtsp-to-onvif.git"
+  },
   "author": {
-    "git" : "https://github.com/p10tyr/rtsp-to-onvif",
-    "name": "Piotr Kula",
-    "email": "rtsp2onvif@kula.email"
+    "name": "Connor Gallopo",
+    "email": "connor.gallopo@gmail.com"
   },
-  "forked": {
-    "git" : "https://github.com/daniela-hase/onvif-server",
-    "name": "Daniela Hasenbring",
-    "email": "daniela@koshigaya.de"
-  },
+  "contributors": [
+    {
+      "name": "Piotr Kula",
+      "email": "rtsp2onvif@kula.email",
+      "url": "https://github.com/p10tyr/rtsp-to-onvif"
+    },
+    {
+      "name": "Daniela Hasenbring",
+      "email": "daniela@koshigaya.de",
+      "url": "https://github.com/daniela-hase/onvif-server"
+    }
+  ],
   "dependencies": {
-    "argparse": "2.0.1",
-    "node-tcp-proxy": "0.0.28",
-    "node-uuid": "1.4.8",
-    "simple-node-logger": "21.8.12",
-    "soap": "1.1.5",
-    "xml2js": "0.6.2",
-    "yaml": "2.6.1"
+    "argparse": "^2.0.1",
+    "node-tcp-proxy": "^0.0.28",
+    "simple-node-logger": "^21.8.12",
+    "soap": "^1.9.2",
+    "xml2js": "^0.6.2",
+    "yaml": "^2.9.0"
   }
 }
