@@ -25,7 +25,7 @@ module.exports = class OnvifServer {
     constructor(logger, config) {
         this.config = config;
         this.logger = logger;
-        this.eventsProxy = new EventsProxy(logger, config);
+        this.eventsProxy = config.events === false ? null : new EventsProxy(logger, config);
         this.ptzProxy = config.ptz ? new PtzProxy(logger, config) : null;
         this.imagingProxy = config.imaging === false ? null : new ImagingProxy(logger, config);
 
@@ -240,7 +240,7 @@ module.exports = class OnvifServer {
                             }
                         }
 
-                        if (args.Category === undefined || args.Category == 'All' || args.Category == 'Events') {
+                        if (this.eventsProxy && (args.Category === undefined || args.Category == 'All' || args.Category == 'Events')) {
                             response.Capabilities['Events'] = {
                                 XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/Events`,
                                 WSSubscriptionPolicySupport: false,
@@ -277,11 +277,11 @@ module.exports = class OnvifServer {
                                     XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/media_service`,
                                     Version: { Major: 2, Minor: 5 }
                                 },
-                                {
+                                ...(this.eventsProxy ? [{
                                     Namespace: 'http://www.onvif.org/ver10/events/wsdl',
                                     XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/Events`,
                                     Version: { Major: 2, Minor: 5 }
-                                },
+                                }] : []),
                                 ...(this.ptzProxy ? [{
                                     Namespace: 'http://www.onvif.org/ver20/ptz/wsdl',
                                     XAddr: `http://${this.config.hostname}:${this.config.ports.server}/onvif/PTZ`,
@@ -367,7 +367,7 @@ module.exports = class OnvifServer {
             let image = fs.readFileSync('./resources/snapshot.png');
             response.writeHead(200, { 'Content-Type': 'image/png' });
             response.end(image, 'binary');
-        } else if (this.eventsProxy.matches(action)) {
+        } else if (this.eventsProxy && this.eventsProxy.matches(action)) {
             this.eventsProxy.handle(request, response);
         } else if (this.ptzProxy && this.ptzProxy.matches(action)) {
             this.ptzProxy.handle(request, response);

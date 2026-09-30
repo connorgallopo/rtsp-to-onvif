@@ -103,13 +103,14 @@ MAC and UUID are auto-generated on first run.
   ```
 
   Reolink NVR main streams are often H.265. The proxy only implements ONVIF Media ver10, whose encoding enum has no H.265, so profiles advertise H.264 regardless; the RTSP stream itself passes through untouched.
+- `events: false` stops advertising the Events service, so clients never subscribe. A Reolink RLN16-410 reports `MaxPullPoints=2` for the whole NVR, and the proxy opens one upstream pull point per client subscription per camera, so with several cameras behind one NVR the subscriptions evict each other and pulls fail with 400.
 - PTZ is gated by a per-cam `ptz: true` flag. Auto-detection would need either credentials in config (against the no-creds-in-config rule) or refactoring `device_service` out of the SOAP library binding.
 - Each downstream client gets its own upstream event subscription. Cams advertise `MaxPullPoints=10`, the proxy caps at 32 active subs per cam, so a single Protect controller is fine. Multi-consumer setups (Protect plus Frigate plus Scrypted on the same proxy) burn upstream slots 1:1 with consumers.
 
 ## Not tested
 
 - Smart event topics (`tns1:RuleEngine/ObjectDetector`, person/vehicle classifiers). The cams I have don't emit them. The proxy passes through whatever topics the cam advertises, so if your cam emits these they should reach Protect.
-- Brands other than Hikvision-family cams and the Reolink RLN8-410 NVR. Others need their tokens set in `target.tokens`.
+- Brands other than Hikvision-family cams and the Reolink RLN16-410 NVR. Others need their tokens set in `target.tokens`.
 - Protect versions other than 7.1.60.
 - Hardware smaller than a Pi 4.
 
