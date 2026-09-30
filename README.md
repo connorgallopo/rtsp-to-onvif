@@ -13,7 +13,8 @@ Forked from [p10tyr/rtsp-to-onvif](https://github.com/p10tyr/rtsp-to-onvif), whi
 
 - **Motion events** via Protect 7.1.60's third-party motion alert pipeline. `CreatePullPointSubscription` returns a subscription URL hosted on the proxy itself, so the cam stays unreachable on its isolated network. `PullMessages`, `Renew`, `Unsubscribe`, and per-subscription cleanup all work.
 - **PTZ control** for cams with `ptz: true` in config. `ContinuousMove`, `Stop`, `AbsoluteMove`, `RelativeMove`, `GetStatus`, presets. Profile tokens are translated (`main_stream` to `Profile_1`, etc.) so Hikvision-family cams accept the requests instead of returning `ter:NoProfile`.
-- **Imaging settings** for every cam. Brightness, contrast, IR-cut, white balance, focus. Same token translation pattern, `video_src_token` to `VideoSource_1`.
+- **Imaging settings** for every cam unless `imaging: false`. Brightness, contrast, IR-cut, white balance, focus. Same token translation pattern, `video_src_token` to `VideoSource_1`.
+- **NVR channels.** An NVR serves every channel from one ONVIF endpoint, so each camera sets `target.tokens` to its channel's profile and video source tokens. With `tokens.videoSource` set, `PullMessages` responses only keep notifications whose source token matches it; notifications without a source token pass through.
 - **No credentials in config.** The `wsse:Security` UsernameToken Protect sends at every request is forwarded upstream unchanged, so the password you typed at adoption is the one the cam actually validates.
 - **Snapshots** through the existing TCP forwarder. The cam returns a Digest auth challenge, Protect handles the handshake, the image flows back. The upstream README says snapshot is unimplemented; that's stale, it works.
 
@@ -86,13 +87,29 @@ MAC and UUID are auto-generated on first run.
 ## Notes
 
 - Credentials go in Protect at adoption time. They're not stored on the proxy or in `config.yaml`. The proxy forwards the WS-Security header Protect sends, so the password Protect knows is the one the cam validates.
+- Upstream tokens default to Hikvision's `Profile_1` / `Profile_2` / `VideoSource_1`. For a Reolink NVR, channel N (zero-based, two digits) uses profiles `0N0` / `0N1` and video source `00N`, so channel 6 is:
+
+  ```yaml
+  imaging: false             # Reolink NVRs fault on GetImagingSettings for every channel
+  target:
+    hostname: 192.168.1.193
+    ports:
+      rtsp: 554
+      snapshot: 80             # needs HTTP enabled in the NVR's server settings; also the ONVIF port the proxy forwards to
+    tokens:
+      main: "060"
+      sub: "061"
+      videoSource: "006"
+  ```
+
+  Reolink NVR main streams are often H.265. The proxy only implements ONVIF Media ver10, whose encoding enum has no H.265, so profiles advertise H.264 regardless; the RTSP stream itself passes through untouched.
 - PTZ is gated by a per-cam `ptz: true` flag. Auto-detection would need either credentials in config (against the no-creds-in-config rule) or refactoring `device_service` out of the SOAP library binding.
 - Each downstream client gets its own upstream event subscription. Cams advertise `MaxPullPoints=10`, the proxy caps at 32 active subs per cam, so a single Protect controller is fine. Multi-consumer setups (Protect plus Frigate plus Scrypted on the same proxy) burn upstream slots 1:1 with consumers.
 
 ## Not tested
 
 - Smart event topics (`tns1:RuleEngine/ObjectDetector`, person/vehicle classifiers). The cams I have don't emit them. The proxy passes through whatever topics the cam advertises, so if your cam emits these they should reach Protect.
-- Non-Hikvision-family cameras. Profile and video-source token translation tables assume the `Profile_N` / `VideoSource_N` naming convention.
+- Brands other than Hikvision-family cams and the Reolink RLN8-410 NVR. Others need their tokens set in `target.tokens`.
 - Protect versions other than 7.1.60.
 - Hardware smaller than a Pi 4.
 

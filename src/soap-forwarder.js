@@ -53,6 +53,31 @@ function forward(targetUrl, headers, body) {
     });
 }
 
+// Defaults follow the Hikvision/Luma naming. An NVR exposes every channel
+// behind one ONVIF endpoint, so each camera names its own channel's tokens.
+function upstreamTokens(config) {
+    const t = config.target.tokens || {};
+    return {
+        main: t.main || 'Profile_1',
+        sub: t.sub || 'Profile_2',
+        videoSource: t.videoSource || 'VideoSource_1',
+    };
+}
+
+function upstreamUrl(config, path) {
+    const port = (config.target.ports && config.target.ports.snapshot) || 80;
+    return `http://${config.target.hostname}:${port}${path}`;
+}
+
+function rewriteTokens(body, map) {
+    let out = body;
+    for (const [ours, theirs] of Object.entries(map)) {
+        out = out.replace(new RegExp(`>${ours}<`, 'g'), `>${theirs}<`);
+        out = out.replace(new RegExp(`="${ours}"`, 'g'), `="${theirs}"`);
+    }
+    return out === body ? null : out;
+}
+
 function sanitizeRequestHeaders(headers) {
     const out = {};
     for (const [k, v] of Object.entries(headers)) {
@@ -110,4 +135,7 @@ module.exports = {
     sanitizeRequestHeaders,
     sanitizeResponseHeaders,
     forwardSoap,
+    upstreamTokens,
+    upstreamUrl,
+    rewriteTokens,
 };

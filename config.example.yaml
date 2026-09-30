@@ -2,11 +2,16 @@ onvif:
   - name: BulletCam                               # A user define named that will show up in the consumer device. Use letters only, no spaces or special characters
     dev: enp2s0 #eth0                             # Network interface to add virtual IP's too. use ip addr to find your name
     ptz: false                                    # Set true if this cam supports PTZ — proxy advertises the PTZ service and forwards ContinuousMove/Stop/etc.
+    imaging: true                                 # Set false if the target rejects imaging calls (Reolink NVR channels do)
     target:
       hostname: 192.168.1.187                      # Your cameras IPv4 address
       ports:
         rtsp: 554                                  # Your cameras RTSP port. Typically 554
         snapshot: 80                               # Cameras non https port for snapshots
+      # tokens:                                   # Upstream ONVIF tokens. Omit for Hikvision-family cams (Profile_1, Profile_2, VideoSource_1)
+      #   main: "000"                             # Behind an NVR, name this camera's channel, e.g. Reolink channel 0
+      #   sub: "001"
+      #   videoSource: "000"                      # Setting this also drops other channels' events from PullMessages
     highQuality:
       rtsp: /Streaming/Channels/101/                    # The RTSP Path
       snapshot: /ISAPI/Streaming/Channels/101/picture   # Snapshot path - not working yet

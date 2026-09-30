@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { forwardSoap } = require('./soap-forwarder');
+const { forwardSoap, upstreamUrl } = require('./soap-forwarder');
 
 const MAX_SUBSCRIPTIONS = 32;
 const SWEEP_INTERVAL_MS = 60_000;
@@ -7,13 +7,20 @@ const DEFAULT_TTL_MS = 3600_000;
 const SWEEP_GRACE_MS = 300_000;
 
 const FAULT_REWRITE_FAILED = '<?xml version="1.0"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><s:Fault><s:Code><s:Value>s:Receiver</s:Value></s:Code><s:Reason><s:Text>proxy address rewrite failed</s:Text></s:Reason></s:Fault></s:Body></s:Envelope>';
-const FAULT_SUBSCRIPTION_CAP = '<?xml version="1.0"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><s:Fault><s:Code><s:Value>s:Sender</s:Value></s:Code><s:Reason><s:Text>subscription limit reached</s:Text></s:Reason></s:Fault></s:Body></s:Envelope>';
+const NOTIFICATION_RE = /<\s*(?:[\w-]+:)?NotificationMessage\b[\s\S]*?<\s*\/\s*(?:[\w-]+:)?NotificationMessage\s*>/g;
+const MESSAGE_SOURCE_RE = /<\s*(?:[\w-]+:)?Source\b[^>]*>([\s\S]*?)<\s*\/\s*(?:[\w-]+:)?Source\s*>/;
+const SIMPLE_ITEM_RE = /<\s*(?:[\w-]+:)?SimpleItem\b[^>]*>/g;
+const SOURCE_ITEM_NAMES = new Set(['VideoSourceConfigurationToken', 'VideoSourceToken', 'Source']);
+const FAULT_SUBSCRIPTION_CAP ='<?xml version="1.0"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><s:Fault><s:Code><s:Value>s:Sender</s:Value></s:Code><s:Reason><s:Text>subscription limit reached</s:Text></s:Reason></s:Fault></s:Body></s:Envelope>';
 
 module.exports = class EventsProxy {
     constructor(logger, config) {
         this.logger = logger;
         this.config = config;
         this.subscriptions = new Map();
+        // Only set for cams behind a shared NVR endpoint, whose pull points
+        // return every channel's events.
+        this.sourceToken = (config.target.tokens || {}).videoSource;
         this.cleanupTimer = setInterval(() => this.sweepExpired(), SWEEP_INTERVAL_MS);
         if (this.cleanupTimer.unref) this.cleanupTimer.unref();
     }
@@ -25,15 +32,14 @@ module.exports = class EventsProxy {
     }
 
     upstreamEventsUrl() {
-        const port = (this.config.target.ports && this.config.target.ports.snapshot) || 80;
-        return `http://${this.config.target.hostname}:${port}/onvif/Events`;
+        return upstreamUrl(this.config, '/onvif/Events');
     }
 
     async handle(request, response) {
         const pathname = request.url.split('?')[0];
         const isSubscriptionUrl = pathname.startsWith('/onvif/subscription/');
 
-        let upstreamUrl;
+        let target;
         if (isSubscriptionUrl) {
             const localId = pathname.slice('/onvif/subscription/'.length);
             const sub = this.subscriptions.get(localId);
@@ -43,21 +49,25 @@ module.exports = class EventsProxy {
                 response.end('Subscription not found');
                 return;
             }
-            upstreamUrl = sub.upstreamManagerUrl;
+            target = sub.upstreamManagerUrl;
         } else {
-            upstreamUrl = this.upstreamEventsUrl();
+            target = this.upstreamEventsUrl();
         }
 
         await forwardSoap({
             logger: this.logger,
             name: `${this.config.name}/events`,
-            request, response, upstreamUrl,
+            request, response,
+            upstreamUrl: target,
             rewriteResponse: (respBody, reqBody) => {
                 if (!isSubscriptionUrl && /CreatePullPointSubscription/i.test(reqBody)) {
                     return this.rewriteSubscriptionAddress(respBody);
                 }
                 if (isSubscriptionUrl) {
                     const localId = pathname.slice('/onvif/subscription/'.length);
+                    if (this.sourceToken && /PullMessagesResponse/.test(respBody)) {
+                        return this.filterNotifications(respBody);
+                    }
                     if (/Unsubscribe/.test(reqBody) && /UnsubscribeResponse/.test(respBody)) {
                         if (this.subscriptions.delete(localId)) {
                             this.logger.info(`EVENTS: ${this.config.name} - unsubscribed ${localId}`);
@@ -97,6 +107,22 @@ module.exports = class EventsProxy {
         const ourUrl = `http://${this.config.hostname}:${this.config.ports.server}/onvif/subscription/${localId}`;
         this.logger.info(`EVENTS: ${this.config.name} - subscription ${localId} -> ${upstreamUrl}`);
         return body.replace(re, `$1${ourUrl}$3`);
+    }
+
+    filterNotifications(body) {
+        const out = body.replace(NOTIFICATION_RE, (msg) => {
+            const source = msg.match(MESSAGE_SOURCE_RE);
+            if (!source) return msg;
+            let tagged = false;
+            for (const item of source[1].match(SIMPLE_ITEM_RE) || []) {
+                const name = (item.match(/\bName="([^"]*)"/) || [])[1];
+                if (!SOURCE_ITEM_NAMES.has(name)) continue;
+                tagged = true;
+                if ((item.match(/\bValue="([^"]*)"/) || [])[1] === this.sourceToken) return msg;
+            }
+            return tagged ? '' : msg;
+        });
+        return out === body ? null : out;
     }
 
     sweepExpired() {

@@ -1,22 +1,12 @@
-const { forwardSoap } = require('./soap-forwarder');
-
-const VIDEO_SOURCE_TOKEN_MAP = {
-    video_src_token: 'VideoSource_1',
-};
-
-function rewriteVideoSourceTokens(body) {
-    let out = body;
-    for (const [ours, theirs] of Object.entries(VIDEO_SOURCE_TOKEN_MAP)) {
-        out = out.replace(new RegExp(`>${ours}<`, 'g'), `>${theirs}<`);
-        out = out.replace(new RegExp(`="${ours}"`, 'g'), `="${theirs}"`);
-    }
-    return out === body ? null : out;
-}
+const { forwardSoap, upstreamTokens, upstreamUrl, rewriteTokens } = require('./soap-forwarder');
 
 module.exports = class ImagingProxy {
     constructor(logger, config) {
         this.logger = logger;
         this.config = config;
+        this.videoSourceTokenMap = {
+            video_src_token: upstreamTokens(config).videoSource,
+        };
     }
 
     matches(pathname) {
@@ -24,8 +14,7 @@ module.exports = class ImagingProxy {
     }
 
     upstreamImagingUrl() {
-        const port = (this.config.target.ports && this.config.target.ports.snapshot) || 80;
-        return `http://${this.config.target.hostname}:${port}/onvif/Imaging`;
+        return upstreamUrl(this.config, '/onvif/Imaging');
     }
 
     async handle(request, response) {
@@ -34,7 +23,7 @@ module.exports = class ImagingProxy {
             name: `${this.config.name}/imaging`,
             request, response,
             upstreamUrl: this.upstreamImagingUrl(),
-            rewriteRequest: rewriteVideoSourceTokens,
+            rewriteRequest: (body) => rewriteTokens(body, this.videoSourceTokenMap),
         });
     }
 };
