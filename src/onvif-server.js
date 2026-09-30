@@ -5,11 +5,24 @@ const xml2js = require('xml2js');
 const crypto = require('crypto');
 const url = require('url');
 const fs = require('fs');
+const path = require('path');
 
 const { getIp4FromMac } = require('./net-tools')
 const EventsProxy = require('./events-proxy')
 const PtzProxy = require('./ptz-proxy')
 const ImagingProxy = require('./imaging-proxy')
+
+// The ONVIF WSDLs import schemas from onvif.org, oasis-open.org and w3.org.
+// w3.org answers soap's fetch with 403, which leaves the services unbound, so
+// every import resolves to the copy under wsdl/vendor/<host>/<path>.
+const VENDORED_WSDL_DIR = path.resolve(__dirname, '..', 'wsdl', 'vendor');
+
+function vendoredImport(location) {
+    const m = /^https?:\/\/(.+)$/.exec(location);
+    if (!m) return location;
+    const local = path.join(VENDORED_WSDL_DIR, m[1]);
+    return fs.existsSync(local) ? local : location;
+}
 
 Date.prototype.stdTimezoneOffset = function () {
     let jan = new Date(this.getFullYear(), 0, 1);
@@ -386,21 +399,15 @@ module.exports = class OnvifServer {
         this.server = http.createServer(this.listen.bind(this));
         this.server.listen(this.config.ports.server, this.config.hostname);
 
-        this.deviceService = soap.listen(this.server, {
-            path: '/onvif/device_service',
+        const listenSoap = (name) => soap.listen(this.server, {
+            path: `/onvif/${name}`,
             services: this.onvif,
-            xml: fs.readFileSync('./wsdl/device_service.wsdl', 'utf8'),
-            forceSoap12Headers: true
+            xml: fs.readFileSync(`./wsdl/${name}.wsdl`, 'utf8'),
+            forceSoap12Headers: true,
+            wsdl_options: { overrideImportLocation: vendoredImport },
         });
-       
-
-        this.mediaService = soap.listen(this.server, {
-            path: '/onvif/media_service',
-            services: this.onvif,
-            xml: fs.readFileSync('./wsdl/media_service.wsdl', 'utf8'),
-            forceSoap12Headers: true
-        });
-        
+        this.deviceService = listenSoap('device_service');
+        this.mediaService = listenSoap('media_service');
     }
 
     enableDebugOutput() {

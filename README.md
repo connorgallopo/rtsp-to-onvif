@@ -104,6 +104,7 @@ MAC and UUID are auto-generated on first run.
 
   Reolink NVR main streams are often H.265. The proxy only implements ONVIF Media ver10, whose encoding enum has no H.265, so profiles advertise H.264 regardless; the RTSP stream itself passes through untouched.
 - `events: false` stops advertising the Events service, so clients never subscribe. A Reolink RLN16-410 reports `MaxPullPoints=2` for the whole NVR, and the proxy opens one upstream pull point per client subscription per camera, so with several cameras behind one NVR the subscriptions evict each other and pulls fail with 400.
+- The ONVIF WSDLs and every schema they import are vendored under `wsdl/vendor/<host>/<path>`, so startup fetches nothing. Fetching them live from onvif.org and w3.org failed once w3.org started answering with 403.
 - PTZ is gated by a per-cam `ptz: true` flag. Auto-detection would need either credentials in config (against the no-creds-in-config rule) or refactoring `device_service` out of the SOAP library binding.
 - Each downstream client gets its own upstream event subscription. Cams advertise `MaxPullPoints=10`, the proxy caps at 32 active subs per cam, so a single Protect controller is fine. Multi-consumer setups (Protect plus Frigate plus Scrypted on the same proxy) burn upstream slots 1:1 with consumers.
 

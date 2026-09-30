@@ -28,7 +28,7 @@
     "argparse": "^2.0.1",
     "node-tcp-proxy": "^0.0.28",
     "simple-node-logger": "^21.8.12",
-    "soap": "1.1.5",
+    "soap": "1.13.1",
     "xml2js": "^0.6.2",
     "yaml": "^2.9.0"
   }
