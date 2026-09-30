@@ -13,6 +13,8 @@ onvif:
       #   main: "000"                             # Behind an NVR, name this camera's channel, e.g. Reolink channel 0
       #   sub: "001"
       #   videoSource: "000"                      # Setting this also drops other channels' events from PullMessages
+      # reolink:                                  # Reolink NVR: send ContinuousMove/Stop through its PtzCtrl API instead of ONVIF
+      #   channel: 0                              # NVR channel number; needs REOLINK_USERNAME / REOLINK_PASSWORD in the environment
     highQuality:
       rtsp: /Streaming/Channels/101/                    # The RTSP Path
       snapshot: /ISAPI/Streaming/Channels/101/picture   # Snapshot path - not working yet

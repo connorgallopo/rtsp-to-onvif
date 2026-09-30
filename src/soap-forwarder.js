@@ -94,10 +94,9 @@ function sanitizeResponseHeaders(headers) {
     return out;
 }
 
-async function forwardSoap({ logger, name, request, response, upstreamUrl, rewriteRequest, rewriteResponse }) {
+async function forwardSoap({ logger, name, request, response, upstreamUrl, body: preread, rewriteRequest, rewriteResponse }) {
     try {
-        const reqBody = await readBody(request);
-        let body = reqBody.toString('utf8');
+        let body = preread !== undefined ? preread : (await readBody(request)).toString('utf8');
         if (typeof rewriteRequest === 'function') {
             const r = rewriteRequest(body);
             if (r != null) body = r;

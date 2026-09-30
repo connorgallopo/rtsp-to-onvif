@@ -11,6 +11,7 @@ const path = require('path');
 const { getIp4FromMac } = require('./net-tools')
 const EventsProxy = require('./events-proxy')
 const PtzProxy = require('./ptz-proxy')
+const ReolinkPtz = require('./reolink-ptz')
 const ImagingProxy = require('./imaging-proxy')
 
 // The ONVIF WSDLs import schemas from onvif.org, oasis-open.org and w3.org.
@@ -40,7 +41,9 @@ module.exports = class OnvifServer {
         this.config = config;
         this.logger = logger;
         this.eventsProxy = config.events === false ? null : new EventsProxy(logger, config);
-        this.ptzProxy = config.ptz ? new PtzProxy(logger, config) : null;
+        this.ptzProxy = !config.ptz ? null
+            : config.target.reolink ? new ReolinkPtz(logger, config)
+                : new PtzProxy(logger, config);
         this.imagingProxy = config.imaging === false ? null : new ImagingProxy(logger, config);
 
         this.config.hostname = getIp4FromMac(logger, this.config.mac);

@@ -19,11 +19,11 @@ module.exports = class PtzProxy {
         return upstreamUrl(this.config, '/onvif/PTZ');
     }
 
-    async handle(request, response) {
+    async handle(request, response, body) {
         await forwardSoap({
             logger: this.logger,
             name: `${this.config.name}/ptz`,
-            request, response,
+            request, response, body,
             upstreamUrl: this.upstreamPtzUrl(),
             rewriteRequest: (body) => rewriteTokens(body, this.profileTokenMap),
         });
