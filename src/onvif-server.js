@@ -5,6 +5,7 @@ const xml2js = require('xml2js');
 const crypto = require('crypto');
 const url = require('url');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const { getIp4FromMac } = require('./net-tools')
@@ -317,6 +318,26 @@ module.exports = class OnvifServer {
                             SerialNumber: `${this.config.name.replace(' ', '_')}-0000`,
                             HardwareId: `${this.config.name.replace(' ', '_')}-1001`
                         };
+                    },
+
+                    GetNetworkInterfaces: (args) => {
+                        const mac = this.config.mac.toLowerCase();
+                        const iface = Object.values(os.networkInterfaces()).flat()
+                            .find((n) => n.family === 'IPv4' && n.mac.toLowerCase() === mac);
+                        return {
+                            NetworkInterfaces: [{
+                                attributes: { token: this.config.dev },
+                                Enabled: true,
+                                Info: { Name: this.config.dev, HwAddress: mac, MTU: 1500 },
+                                IPv4: {
+                                    Enabled: true,
+                                    Config: {
+                                        Manual: [{ Address: this.config.hostname, PrefixLength: iface ? Number(iface.cidr.split('/')[1]) : 24 }],
+                                        DHCP: false
+                                    }
+                                }
+                            }]
+                        };
                     }
 
                 }
@@ -335,6 +356,32 @@ module.exports = class OnvifServer {
                             VideoSources: [
                                 this.videoSource
                             ]
+                        };
+                    },
+
+                    // The proxy can't change the upstream encoder, so each range
+                    // is pinned to what the stream is already configured to send.
+                    GetVideoEncoderConfigurationOptions: (args) => {
+                        args = args || {};
+                        let streams;
+                        if (!args.ProfileToken && !args.ConfigurationToken)
+                            streams = [this.config.highQuality, this.config.lowQuality].filter(Boolean);
+                        else if ((args.ProfileToken == 'sub_stream' || args.ConfigurationToken == 'encoder_lq_config_token') && this.config.lowQuality)
+                            streams = [this.config.lowQuality];
+                        else
+                            streams = [this.config.highQuality];
+
+                        return {
+                            Options: {
+                                QualityRange: { Min: 0, Max: 5 },
+                                H264: {
+                                    ResolutionsAvailable: streams.map((s) => ({ Width: s.width, Height: s.height })),
+                                    GovLengthRange: { Min: 1, Max: 100 },
+                                    FrameRateRange: { Min: 1, Max: Math.max(...streams.map((s) => s.framerate)) },
+                                    EncodingIntervalRange: { Min: 1, Max: 1 },
+                                    H264ProfilesSupported: ['Main']
+                                }
+                            }
                         };
                     },
 
