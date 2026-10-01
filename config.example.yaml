@@ -1,14 +1,14 @@
 onvif:
   - name: BulletCam                               # A user define named that will show up in the consumer device. Use letters only, no spaces or special characters
     dev: enp2s0 #eth0                             # Network interface to add virtual IP's too. use ip addr to find your name
-    ptz: false                                    # Set true if this cam supports PTZ — proxy advertises the PTZ service and forwards ContinuousMove/Stop/etc.
+    ptz: false                                    # Set true if this cam supports PTZ; the proxy then advertises the PTZ service and forwards ContinuousMove, Stop and the rest
     imaging: true                                 # Set false if the target rejects imaging calls (Reolink NVR channels do)
     events: true                                  # Set false to stop advertising the Events service
     target:
       hostname: 192.168.1.187                      # Your cameras IPv4 address
       ports:
         rtsp: 554                                  # Your cameras RTSP port. Typically 554
-        snapshot: 80                               # Cameras non https port for snapshots
+        snapshot: 80                               # Cameras HTTP port. Snapshots go here, and so do the events, PTZ and imaging calls the proxy forwards
       # tokens:                                   # Upstream ONVIF tokens. Omit for Hikvision-family cams (Profile_1, Profile_2, VideoSource_1)
       #   main: "000"                             # Behind an NVR, name this camera's channel, e.g. Reolink channel 0
       #   sub: "001"
@@ -17,7 +17,7 @@ onvif:
       #   channel: 0                              # NVR channel number; needs REOLINK_USERNAME / REOLINK_PASSWORD in the environment
     highQuality:
       rtsp: /Streaming/Channels/101/                    # The RTSP Path
-      snapshot: /ISAPI/Streaming/Channels/101/picture   # Snapshot path - not working yet
+      snapshot: /ISAPI/Streaming/Channels/101/picture   # Snapshot path on the camera
       width: 2048                                       # The Video Width
       height: 1536                                      # The Video Height
       framerate: 15                                     # The Video Framerate/FPS

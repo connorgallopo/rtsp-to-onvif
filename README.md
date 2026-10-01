@@ -1,47 +1,38 @@
-# Virtual ONVIF Proxy
+# Virtual ONVIF proxy for UniFi Protect
 
-Fakes ONVIF Device and Media services in front of an RTSP camera so UniFi Protect can adopt it as a native ONVIF cam, then proxies ONVIF Events, PTZ, and Imaging through to the real camera.
+UniFi Protect adopts third-party cameras over ONVIF, and plenty of cameras either don't speak ONVIF the way Protect expects or sit somewhere Protect can't reach them, like behind an NVR. This proxy stands in for each camera. It gives every camera its own IP and MAC on your LAN, answers Protect's ONVIF device and media questions itself, and passes the video, snapshots, motion events and PTZ commands through to the real hardware.
 
-> **In UniFi Protect 7.1.60:**
->
-> - PTZ joystick control on third-party cameras works without an AI Port. The AI Port is the documented requirement; this proxy makes it work without one.
-> - Motion events from third-party cameras show up on the Protect timeline.
+Protect sees a normal ONVIF camera. The real camera only ever talks to the proxy.
 
-Forked from [p10tyr/rtsp-to-onvif](https://github.com/p10tyr/rtsp-to-onvif), which built the adoption and streaming pieces. This fork adds the service passthroughs that make the two things above work.
+This is a fork of [p10tyr/rtsp-to-onvif](https://github.com/p10tyr/rtsp-to-onvif), which built the adoption and streaming side on top of Daniela Hase's original virtual ONVIF server. This fork adds motion events, PTZ and imaging passthrough, and support for cameras behind a Reolink NVR.
 
-## What works
+## What you get in Protect
 
-- **Motion events** via Protect 7.1.60's third-party motion alert pipeline. `CreatePullPointSubscription` returns a subscription URL hosted on the proxy itself, so the cam stays unreachable on its isolated network. `PullMessages`, `Renew`, `Unsubscribe`, and per-subscription cleanup all work.
-- **PTZ control** for cams with `ptz: true` in config. `ContinuousMove`, `Stop`, `AbsoluteMove`, `RelativeMove`, `GetStatus`, presets. Profile tokens are translated (`main_stream` to `Profile_1`, etc.) so Hikvision-family cams accept the requests instead of returning `ter:NoProfile`.
-- **Imaging settings** for every cam unless `imaging: false`. Brightness, contrast, IR-cut, white balance, focus. Same token translation pattern, `video_src_token` to `VideoSource_1`.
-- **NVR channels.** An NVR serves every channel from one ONVIF endpoint, so each camera sets `target.tokens` to its channel's profile and video source tokens. With `tokens.videoSource` set, `PullMessages` responses only keep notifications whose source token matches it; notifications without a source token pass through.
-- **No credentials in config.** The `wsse:Security` UsernameToken Protect sends at every request is forwarded upstream unchanged, so the password you typed at adoption is the one the cam actually validates.
-- **Snapshots** through the existing TCP forwarder. The cam returns a Digest auth challenge, Protect handles the handshake, the image flows back. The upstream README says snapshot is unimplemented; that's stale, it works.
+On Protect 7.1.60 with Hikvision-family cameras:
 
-## Tested on
+- Live view and recording from the camera's own RTSP streams, main and sub.
+- Snapshots. Protect handles the camera's digest auth itself.
+- Motion events on the timeline, through Protect's third-party motion alert pipeline.
+- PTZ joystick control for cameras marked `ptz: true`. Protect documents an AI Port as the requirement for third-party PTZ; with this proxy it works without one.
+- Imaging settings (brightness, contrast, IR cut and so on), where the camera supports them.
 
-- 4x Luma Surveillance LUM-310-DOM-IP-BL (Hikvision OEM), firmware V5.5.52
-- 1x Luma LUM-310-PTZ-IP-WH, firmware V5.5.6
-- 1x Luma LUM-510-PTZ-IP-WH, firmware V5.5.6
-- UDM with UniFi Protect 7.1.60
-- Running as a systemd service on a Raspberry Pi (not the upstream's Docker path, but macvlan works the same way)
+Behind a Reolink RLN16-410 NVR, cameras adopt, stream and take PTZ commands. Motion events are off there for now; see the Reolink section for why.
 
-The profile and video-source token translation tables are hardcoded against the Hikvision/Luma `Profile_N` / `VideoSource_N` convention. Dahua, Reolink, Amcrest etc. likely use different tokens. If you try this with one of those and PTZ or imaging returns `ter:InvalidArgVal`, open an issue with what your cam's `GetProfiles` and `GetVideoSources` return.
+## Devices and the settings they need
 
-## Performance
+| Device | Config beyond the basics | Status |
+|---|---|---|
+| Hikvision and Hikvision OEM cameras (Luma) | Nothing. The defaults use Hikvision's ONVIF token names. | Running on 6 Luma cameras, 2 of them PTZ |
+| Cameras behind a Reolink NVR (RLN16-410) | `target.tokens`, `imaging: false`, `events: false`, and `target.reolink.channel` on PTZ cameras. HTTP enabled on the NVR. | Running on an RLN16-410 with 11 channels, 2 of them PTZ |
+| Anything else | Probably `target.tokens`. See "Other brands" below. | Untested |
 
-Sample stats from a Raspberry Pi 4 Model B (4 GB, Debian, Node 18.13), six cameras configured, under normal load (Protect polling for motion events, fetching snapshots, RTSP forwarding through to all 6 cams):
+## Running it
 
-- Memory: around 380 MB RSS after ~1 hour uptime. About 10% of the Pi's 4 GB. Most of the footprint is `node-tcp-proxy` buffering active RTSP streams; the ONVIF SOAP layer itself is minor.
-- CPU: ~65% of one core on average (Node's JS work is single-threaded), which is roughly 16% of total on a 4-core Pi 4.
-- ~25 open TCP connections (RTSP forwarders, snapshot connections, ONVIF SOAP listeners across 6 virtual cams).
-- 1 process, ~11 threads (Node main + libuv pool + V8 helpers).
+Every camera needs its own IP on your LAN. There are three ways to give it one, and which fits depends on your host.
 
-The Pi 4 has plenty of headroom. Smaller hardware (Pi 3, Zero 2 W) is untested.
+### Docker, one container for all cameras
 
-## Install
-
-Same docker compose flow as upstream:
+This is the upstream design and what `compose.yaml` does. The container runs on the host network with `NET_ADMIN`, and at startup creates a macvlan interface per camera on `dev` and gets it an address over DHCP.
 
 ```bash
 mkdir rtsp-to-onvif && cd rtsp-to-onvif
@@ -52,17 +43,63 @@ nano config.yaml
 sudo docker compose up
 ```
 
-If the cameras show up in Protect's adoption queue, you're good. `sudo docker compose up -d` to detach.
+If the cameras show up in Protect's adoption queue, stop it and run `sudo docker compose up -d`.
 
-## Config
+On first run the proxy fills in a MAC and UUID for any camera that doesn't have one and writes them back to `config.yaml`, so mount it writable the first time. Once those values are set they're how Protect recognizes the camera, so don't change them later.
 
-Bare-minimum per camera, with the new `ptz: true` flag on cams that support PTZ:
+One catch: with several macvlans on the same subnet in one network namespace, the kernel has to pick which interface each reply leaves from. Without policy routing support (`CONFIG_IP_MULTIPLE_TABLES`), it sends every reply out the first one, and your router ends up pairing IPs with the wrong MACs. Some Rockchip board kernels ship without it. If your UniFi client list shows the virtual cameras with mixed-up IPs, use the next option.
+
+### Docker, one container per camera
+
+Each camera gets its own container on a Docker macvlan network, with a fixed IP and MAC. Each container sees exactly one interface, so nothing gets mixed up, and no container needs `NET_ADMIN`. Give each container a config with just its own camera, `dev: eth0`, and the same `mac` the network assigns it.
+
+```yaml
+services:
+  front-door:
+    image: ghcr.io/connorgallopo/rtsp-to-onvif:latest
+    restart: unless-stopped
+    networks:
+      cameras:
+        ipv4_address: 192.168.1.210
+        mac_address: 1A:11:B0:15:57:FD
+    volumes:
+      - ./front-door.yaml:/onvif.yaml:ro
+
+networks:
+  cameras:
+    driver: macvlan
+    driver_opts:
+      parent: eth0
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24
+          gateway: 192.168.1.1
+          ip_range: 192.168.1.208/28
+```
+
+The Docker host itself can't reach macvlan containers. Everything else on the LAN, Protect included, can.
+
+### systemd on the host
+
+Run `node main.js config.yaml` from a checkout, on Node 22. Create the macvlans yourself before it starts so you control the addresses, for example in `ExecStartPre` lines:
+
+```ini
+ExecStartPre=/bin/bash -c 'ip link del rtsp2onvif_0 2>/dev/null || true'
+ExecStartPre=/bin/bash -c 'ip link add rtsp2onvif_0 link eth0 address 1A:11:B0:D1:BD:FB type macvlan mode bridge'
+ExecStartPre=/bin/bash -c 'ip link set rtsp2onvif_0 up'
+ExecStartPre=/bin/bash -c 'ip addr add 192.168.1.240/24 dev rtsp2onvif_0'
+```
+
+When an interface with the camera's MAC already exists, the proxy uses its address and skips creating one.
+
+## Configuration
+
+The config file is YAML with a list of cameras under `onvif:`. A minimal Hikvision camera looks like this:
 
 ```yaml
 onvif:
   - name: FrontDoor
     dev: eth0
-    ptz: false                        # set true if this cam supports PTZ
     target:
       hostname: 192.168.1.187
       ports:
@@ -82,40 +119,127 @@ onvif:
       snapshot: 8080
 ```
 
-MAC and UUID are auto-generated on first run.
+### Per-camera settings
 
-## Notes
+| Setting | Default | What it does |
+|---|---|---|
+| `name` | required | Name Protect shows. Letters and digits only. |
+| `dev` | required | Network interface the camera's macvlan hangs off. In a per-camera container this is `eth0`. |
+| `mac` | generated | MAC of the virtual camera. Generated with a `1A:11:B0` prefix and saved if missing. Keep it fixed once the camera is adopted. |
+| `uuid` | generated | ONVIF device ID. Generated and saved if missing. Changing it makes Protect see a new camera. |
+| `ptz` | `false` | Advertise the PTZ service and forward PTZ commands. |
+| `imaging` | `true` | Advertise the imaging service. Set `false` if the target rejects imaging calls. |
+| `events` | `true` | Advertise the events service. Set `false` and Protect won't subscribe at all. |
+| `target.hostname` | required | IP of the real camera, or of the NVR. |
+| `target.ports.rtsp` | | RTSP port on the target, usually 554. The proxy only forwards RTSP when this and `ports.rtsp` are both set. |
+| `target.ports.snapshot` | `80` | HTTP port on the target. Snapshots go here, and so do the forwarded events, PTZ and imaging calls, so it has to be a port that answers ONVIF too. |
+| `target.tokens.main` | `Profile_1` | The target's ONVIF profile token for the main stream. PTZ commands use it. |
+| `target.tokens.sub` | `Profile_2` | The target's profile token for the sub stream. |
+| `target.tokens.videoSource` | `VideoSource_1` | The target's video source token, used by imaging. Setting it explicitly also filters motion events down to that source; see below. |
+| `target.reolink.channel` | | Reolink NVR channel number. On a PTZ camera this sends moves through Reolink's own API instead of ONVIF. Needs the `REOLINK_*` variables. |
+| `highQuality.rtsp` | required | RTSP path of the main stream on the target. |
+| `highQuality.snapshot` | | Snapshot path on the target. Without it Protect gets a placeholder image. |
+| `highQuality.width`, `height`, `framerate`, `bitrate`, `quality` | required | What the proxy tells Protect about the main stream. Match the camera's real settings; the proxy doesn't transcode. |
+| `lowQuality` | | Same fields for the sub stream. Leave it out and the camera only offers one stream. |
+| `ports.server` | required | Port the virtual camera's ONVIF service listens on. |
+| `ports.rtsp`, `ports.snapshot` | required | Ports the virtual camera forwards to the target's RTSP and snapshot ports. These listen on every address the process has, so in a shared network namespace each target host needs its own pair. In per-camera containers they can repeat. |
 
-- Credentials go in Protect at adoption time. They're not stored on the proxy or in `config.yaml`. The proxy forwards the WS-Security header Protect sends, so the password Protect knows is the one the cam validates.
-- Upstream tokens default to Hikvision's `Profile_1` / `Profile_2` / `VideoSource_1`. For a Reolink NVR, channel N (zero-based, two digits) uses profiles `0N0` / `0N1` and video source `00N`, so channel 6 is:
+### Environment variables
 
-  ```yaml
-  imaging: false             # Reolink NVRs fault on GetImagingSettings for every channel
-  target:
-    hostname: 192.168.1.193
+| Variable | What it does |
+|---|---|
+| `DEBUG` | Any value turns on trace logging, including every ONVIF request and response. Useful while adopting, noisy after. |
+| `REOLINK_USERNAME`, `REOLINK_PASSWORD` | NVR login for cameras with `target.reolink`. Nothing else uses them. |
+
+### Credentials
+
+You enter the camera's username and password in Protect when you adopt it. The proxy stores neither: Protect signs every ONVIF request with them, and the proxy forwards that signature to the camera untouched, so the camera checks its own password. RTSP and snapshot logins pass through the same way.
+
+The one exception is Reolink PTZ. Reolink's PTZ API needs a real login rather than a forwarded signature, so cameras with `target.reolink` read one from `REOLINK_USERNAME` and `REOLINK_PASSWORD`. Keep those in your secret store, not in the config file.
+
+## Hikvision and Luma
+
+These work with the defaults. Use the camera's `/Streaming/Channels/101/` (main) and `/102/` (sub) paths, and `/ISAPI/Streaming/Channels/101/picture` for snapshots. Set `ptz: true` on PTZ models.
+
+## Reolink NVRs
+
+An NVR puts all of its channels behind one ONVIF endpoint, so each virtual camera has to point at its own channel. This was built against an RLN16-410 (hardware N6MB01, firmware v3.6.5.562). Other Reolink NVRs likely behave the same, but that's untested.
+
+Here's channel 6 of a 4K PTZ camera:
+
+```yaml
+  - name: HangarPTZ
+    dev: eth0
+    ptz: true
+    imaging: false
+    events: false
+    target:
+      hostname: 192.168.1.193
+      ports:
+        rtsp: 554
+        snapshot: 80
+      tokens:
+        main: "060"
+        sub: "061"
+        videoSource: "006"
+      reolink:
+        channel: 6
+    highQuality:
+      rtsp: /Preview_07_main
+      snapshot: /cgi-bin/api.cgi?cmd=onvifSnapPic&channel=6
+      width: 3840
+      height: 2160
+      framerate: 25
+      bitrate: 6144
+      quality: 4
+    lowQuality:
+      rtsp: /Preview_07_sub
+      snapshot: /cgi-bin/api.cgi?cmd=onvifSnapPic&channel=6
+      width: 896
+      height: 512
+      framerate: 20
+      bitrate: 1024
+      quality: 1
     ports:
-      rtsp: 554
-      snapshot: 80             # needs HTTP enabled in the NVR's server settings; also the ONVIF port the proxy forwards to
-    tokens:
-      main: "060"
-      sub: "061"
-      videoSource: "006"
-  ```
+      server: 8081
+      rtsp: 8554
+      snapshot: 8580
+```
 
-  Reolink NVR main streams are often H.265. The proxy only implements ONVIF Media ver10, whose encoding enum has no H.265, so profiles advertise H.264 regardless; the RTSP stream itself passes through untouched.
-- Reolink NVRs answer ONVIF `ContinuousMove` and `Stop` with 200 and never move the camera. Their own `PtzCtrl` API does, so a PTZ cam with `target.reolink.channel: N` sends those two calls there instead: velocity signs pick `Left`/`Right`/`Up`/`Down` or a diagonal, zoom picks `ZoomInc`/`ZoomDec`, and the magnitude scales to Reolink's 1 to 64 speed. Every other PTZ call still goes to the NVR over ONVIF. `PtzCtrl` needs a real login, read from `REOLINK_USERNAME` and `REOLINK_PASSWORD`, so this is the one feature that stores credentials; cams without `target.reolink` still store none.
-- `events: false` stops advertising the Events service, so clients never subscribe. A Reolink RLN16-410 reports `MaxPullPoints=2` for the whole NVR, and the proxy opens one upstream pull point per client subscription per camera, so with several cameras behind one NVR the subscriptions evict each other and pulls fail with 400.
-- The ONVIF WSDLs and every schema they import are vendored under `wsdl/vendor/<host>/<path>`, so startup fetches nothing. Fetching them live from onvif.org and w3.org failed once w3.org started answering with 403.
-- PTZ is gated by a per-cam `ptz: true` flag. Auto-detection would need either credentials in config (against the no-creds-in-config rule) or refactoring `device_service` out of the SOAP library binding.
-- Each downstream client gets its own upstream event subscription. Cams advertise `MaxPullPoints=10`, the proxy caps at 32 active subs per cam, so a single Protect controller is fine. Multi-consumer setups (Protect plus Frigate plus Scrypted on the same proxy) burn upstream slots 1:1 with consumers.
+Channel numbers start at 0, but the RTSP paths start at 1, so channel 6 is `Preview_07`. The ONVIF tokens follow the channel: profiles are `0N0` and `0N1` and the video source is `00N`, so channel 6 is `060`, `061` and `006`, and channel 10 is `100`, `101` and `010`.
 
-## Not tested
+Some things about these NVRs that took a while to find:
 
-- Smart event topics (`tns1:RuleEngine/ObjectDetector`, person/vehicle classifiers). The cams I have don't emit them. The proxy passes through whatever topics the cam advertises, so if your cam emits these they should reach Protect.
-- Brands other than Hikvision-family cams and the Reolink RLN16-410 NVR. Others need their tokens set in `target.tokens`.
-- Protect versions other than 7.1.60.
-- Hardware smaller than a Pi 4.
+- Turn on HTTP (port 80) under the NVR's network server settings. With it off, port 80 redirects everything to HTTPS and the ONVIF port (8000) doesn't serve snapshots. With it on, port 80 answers both snapshots and ONVIF, which is why `target.ports.snapshot` is 80.
+- ONVIF PTZ doesn't work through the NVR. It answers `ContinuousMove` and `Stop` with success and never moves the camera, whichever endpoint, axis or velocity format you use. Reolink's own `PtzCtrl` API does move it. So with `target.reolink.channel` set, the proxy turns Protect's moves into `PtzCtrl` calls. Direction comes from the signs of the velocity, diagonals included. Zoom becomes `ZoomInc` or `ZoomDec`, and the speed scales to Reolink's 1 to 64. Other PTZ calls still go over ONVIF.
+- Imaging calls fault for every channel, hence `imaging: false`.
+- The NVR allows only 2 event subscriptions in total, across all channels. The proxy opens one upstream subscription per Protect subscription per camera, so with more than a couple of cameras they push each other out and Protect gets constant 400 errors. Keep `events: false` until the proxy shares one subscription across cameras. The per-camera filtering for that is already in place: with `target.tokens.videoSource` set, the proxy drops events from other channels.
+- The NVR rejects event pulls that lack a WS-Addressing `To` header. The proxy rewrites `To` to the NVR's address when the client sends one, but Protect doesn't send it, so adding a missing header is part of the unfinished events work.
+- On this NVR the 4K cameras' main streams are H.265 only, with no 1080p or H.264 option. The proxy implements ONVIF Media 1, which has no way to say H.265, so it labels the stream H.264, as the NVR's own Media 1 service does. The video passes through untouched; a browser without H.265 support may not play it.
+
+## Other brands
+
+The defaults assume Hikvision's ONVIF tokens. For anything else, ask the camera what its tokens are with any ONVIF client: `GetProfiles` gives the profile tokens (`target.tokens.main` and `sub`), and `GetVideoSources` gives the video source token. Put those in `target.tokens`. If PTZ or imaging then fails with `ter:InvalidArgVal` or `ter:NoProfile`, the tokens are still wrong.
+
+If you get it working on another brand, an issue saying which tokens it needed would help the next person.
+
+## Things worth knowing
+
+- The ONVIF WSDLs and every schema they import ship in `wsdl/vendor/`, so the proxy needs no internet access to start. Older versions downloaded them from onvif.org and w3.org at startup, and broke when w3.org started answering those downloads with 403.
+- Each Protect subscription becomes its own upstream subscription, capped at 32 per camera. Luma cameras allow 10, so a single Protect is fine. Running Protect, Frigate and Scrypted against the same proxy uses up camera slots one-for-one.
+- PTZ isn't auto-detected. Detecting it would mean either storing credentials or reworking how the device service is bound, so it's the `ptz` flag instead.
+- `GetVideoEncoderConfigurationOptions` reports exactly the configured resolution and frame rate, since the proxy can't change the camera's encoder.
+
+## Tested with
+
+- Luma LUM-310-DOM-IP-BL ×4 (Hikvision OEM, firmware V5.5.52), LUM-310-PTZ-IP-WH and LUM-510-PTZ-IP-WH (V5.5.6). systemd on a Raspberry Pi 4, Ubuntu 24.04, Node 22.
+- Reolink RLN16-410 NVR with 11 cameras, 2 of them PTZ. One container per camera on an Orange Pi 5 (RK3588), Docker 29.
+- UDM running UniFi Protect 7.1.60.
+
+On the Pi 4 with six cameras (measured on Node 18), the process sat around 380 MB of memory and 65% of one core, most of it the RTSP forwarding. Hardware smaller than a Pi 4 is untested.
+
+Not tested: smart detection topics (person, vehicle and so on, which pass through if the camera sends them), Protect versions other than 7.1.60, and other brands.
 
 ## Credits
 
-Daniela Hase wrote the original virtual ONVIF server. Piotr Kula (p10tyr) made it a docker appliance with auto MAC/IP registration and is upstream of this fork.
+Daniela Hase wrote the original virtual ONVIF server. Piotr Kula (p10tyr) turned it into a Docker appliance with automatic MAC and IP setup, and is upstream of this fork.
