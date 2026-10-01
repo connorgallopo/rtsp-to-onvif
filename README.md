@@ -28,30 +28,55 @@ Behind a Reolink RLN16-410 NVR, cameras adopt, stream and take PTZ commands. Mot
 
 ## Running it
 
-Every camera needs its own IP on your LAN. There are three ways to give it one, and which fits depends on your host.
+Every camera needs its own IP and MAC on your LAN. You can run all the cameras in one process, with the proxy adding an interface per camera to the host, or run one process per camera, each in its own little network namespace. Both work in Docker or without it.
 
-### Docker, one container for all cameras
+One process for everything is the simplest to set up. One process per camera is the safer choice on hosts whose kernel can't route by source address, explained below.
 
-This is the upstream design and what `compose.yaml` does. The container runs on the host network with `NET_ADMIN`, and at startup creates a macvlan interface per camera on `dev` and gets it an address over DHCP.
+### One container for all cameras
 
-```bash
-mkdir rtsp-to-onvif && cd rtsp-to-onvif
-wget https://raw.githubusercontent.com/connorgallopo/rtsp-to-onvif/release/compose.yaml
-wget https://raw.githubusercontent.com/connorgallopo/rtsp-to-onvif/release/config.example.yaml
-cp config.example.yaml config.yaml
-nano config.yaml
-sudo docker compose up
+The container runs on the host network with `NET_ADMIN`. At startup it creates a macvlan interface on `dev` for each camera that doesn't already have one, and asks your DHCP server for its address. That's upstream's design, and what the repo's `compose.yaml` does:
+
+```yaml
+services:
+  rtsp-to-onvif:
+    image: ghcr.io/connorgallopo/rtsp-to-onvif:latest
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./config.yaml:/onvif.yaml
+    # environment:
+    #   DEBUG: "1"
 ```
 
-If the cameras show up in Protect's adoption queue, stop it and run `sudo docker compose up -d`.
+Without compose, the same thing is:
 
-On first run the proxy fills in a MAC and UUID for any camera that doesn't have one and writes them back to `config.yaml`, so mount it writable the first time. Once those values are set they're how Protect recognizes the camera, so don't change them later.
+```bash
+docker run -d --name rtsp-to-onvif --restart unless-stopped \
+  --network host --cap-add NET_ADMIN \
+  -v "$PWD/config.yaml:/onvif.yaml" \
+  ghcr.io/connorgallopo/rtsp-to-onvif:latest
+```
 
-One catch: with several macvlans on the same subnet in one network namespace, the kernel has to pick which interface each reply leaves from. Without policy routing support (`CONFIG_IP_MULTIPLE_TABLES`), it sends every reply out the first one, and your router ends up pairing IPs with the wrong MACs. Some Rockchip board kernels ship without it. If your UniFi client list shows the virtual cameras with mixed-up IPs, use the next option.
+Start from the example config:
 
-### Docker, one container per camera
+```bash
+wget https://raw.githubusercontent.com/connorgallopo/rtsp-to-onvif/release/config.example.yaml
+cp config.example.yaml config.yaml
+```
 
-Each camera gets its own container on a Docker macvlan network, with a fixed IP and MAC. Each container sees exactly one interface, so nothing gets mixed up, and no container needs `NET_ADMIN`. Give each container a config with just its own camera, `dev: eth0`, and the same `mac` the network assigns it.
+Run it in the foreground the first time (`docker compose up`, or `docker run` without `-d`) and watch the cameras appear in Protect's adoption queue.
+
+On first run the proxy fills in a MAC and UUID for any camera that doesn't have one and writes them back to `config.yaml`, which is why the mount is writable. Once those values are set they're how Protect recognizes the camera, so leave them alone.
+
+If you'd rather pick the addresses than take them from DHCP, create the macvlans on the host before the container starts (see the systemd section for the commands). The proxy finds an existing interface by its MAC and uses it.
+
+The catch with this mode is routing. With several macvlans on one subnet in a single network namespace, the kernel has to choose which interface each reply leaves from. Without policy routing support (`CONFIG_IP_MULTIPLE_TABLES`), every reply goes out the first one, and your router ends up pairing IPs with the wrong MACs. Some Rockchip board kernels ship without it; `zcat /proc/config.gz | grep MULTIPLE_TABLES` or `grep MULTIPLE_TABLES /boot/config-$(uname -r)` tells you. If your UniFi client list shows the virtual cameras with mixed-up IPs, run one container per camera instead.
+
+### One container per camera
+
+Each camera gets a container on a Docker macvlan network with a fixed IP and MAC. Every container sees exactly one interface, so replies can't leave from the wrong one, and no container needs `NET_ADMIN`. Each container gets a config holding only its own camera, with `dev: eth0` and the same `mac` the network assigns it.
 
 ```yaml
 services:
@@ -65,6 +90,16 @@ services:
     volumes:
       - ./front-door.yaml:/onvif.yaml:ro
 
+  back-yard:
+    image: ghcr.io/connorgallopo/rtsp-to-onvif:latest
+    restart: unless-stopped
+    networks:
+      cameras:
+        ipv4_address: 192.168.1.211
+        mac_address: 1A:11:B0:51:97:FB
+    volumes:
+      - ./back-yard.yaml:/onvif.yaml:ro
+
 networks:
   cameras:
     driver: macvlan
@@ -77,20 +112,71 @@ networks:
           ip_range: 192.168.1.208/28
 ```
 
+Keep `ip_range` outside your DHCP pool, or reserve those addresses for the MACs in your router.
+
+Without compose, create the network once and start a container per camera:
+
+```bash
+docker network create -d macvlan -o parent=eth0 \
+  --subnet 192.168.1.0/24 --gateway 192.168.1.1 --ip-range 192.168.1.208/28 \
+  cameras
+
+docker run -d --name front-door --restart unless-stopped \
+  --network cameras --ip 192.168.1.210 --mac-address 1A:11:B0:15:57:FD \
+  -v "$PWD/front-door.yaml:/onvif.yaml:ro" \
+  ghcr.io/connorgallopo/rtsp-to-onvif:latest
+```
+
 The Docker host itself can't reach macvlan containers. Everything else on the LAN, Protect included, can.
 
-### systemd on the host
+Since every camera has its own address here, the `ports` values can be the same in every config file.
 
-Run `node main.js config.yaml` from a checkout, on Node 22. Create the macvlans yourself before it starts so you control the addresses, for example in `ExecStartPre` lines:
+### Without Docker
+
+Run it from a checkout on Node 22:
+
+```bash
+git clone -b release https://github.com/connorgallopo/rtsp-to-onvif
+cd rtsp-to-onvif
+npm ci --omit=dev
+cp config.example.yaml config.yaml
+sudo node main.js config.yaml
+```
+
+It needs root, or `CAP_NET_ADMIN`, only to create the macvlan interfaces and run `dhclient` on them. To control the addresses yourself, create the interfaces first and the proxy will use them. A systemd unit that does that for two cameras:
 
 ```ini
+[Unit]
+Description=RTSP to ONVIF proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rtsp-to-onvif
 ExecStartPre=/bin/bash -c 'ip link del rtsp2onvif_0 2>/dev/null || true'
 ExecStartPre=/bin/bash -c 'ip link add rtsp2onvif_0 link eth0 address 1A:11:B0:D1:BD:FB type macvlan mode bridge'
 ExecStartPre=/bin/bash -c 'ip link set rtsp2onvif_0 up'
 ExecStartPre=/bin/bash -c 'ip addr add 192.168.1.240/24 dev rtsp2onvif_0'
+ExecStartPre=/bin/bash -c 'ip link del rtsp2onvif_1 2>/dev/null || true'
+ExecStartPre=/bin/bash -c 'ip link add rtsp2onvif_1 link eth0 address 1A:11:B0:A3:7E:02 type macvlan mode bridge'
+ExecStartPre=/bin/bash -c 'ip link set rtsp2onvif_1 up'
+ExecStartPre=/bin/bash -c 'ip addr add 192.168.1.231/24 dev rtsp2onvif_1'
+ExecStart=/usr/bin/node main.js config.yaml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-When an interface with the camera's MAC already exists, the proxy uses its address and skips creating one.
+Point `ExecStart` at whichever Node 22 binary you have; with mise that's `~/.local/share/mise/installs/node/22/bin/node`. Everything in the routing caveat above applies here too, because all the interfaces live on the host.
+
+The original deployment of this fork runs on a host that is also a Tailscale subnet router for the same LAN, and its unit removes Tailscale's route for that LAN from table 52 before starting. If you're in the same position and the cameras are unreachable, it's worth trying:
+
+```ini
+ExecStartPre=/bin/bash -c 'ip route del 192.168.1.0/24 dev tailscale0 table 52 2>/dev/null || true'
+```
 
 ## Configuration
 
